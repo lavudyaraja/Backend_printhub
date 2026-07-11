@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PrintHub Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --p: #6D4AFF; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #F5F4FB; }
+    .bar { height: 8px; border-radius: 999px; background: #ECECF1; overflow: hidden; }
+    .bar > div { height: 100%; border-radius: 999px; transition: width .4s; }
+  </style>
+</head>
+<body class="text-slate-800">
+
+  <!-- LOGIN -->
+  <div id="login" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl border border-slate-200 p-8 w-full max-w-sm">
+      <div class="flex items-center gap-2 mb-6">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white text-xl" style="background:var(--p)">🖨️</div>
+        <div>
+          <div class="text-xl font-extrabold"><span>Print</span><span style="color:var(--p)">Hub</span></div>
+          <div class="text-xs text-slate-400">Admin Console</div>
+        </div>
+      </div>
+      <h1 class="text-lg font-bold mb-1">Sign in</h1>
+      <p class="text-sm text-slate-400 mb-5">Operator / admin access only.</p>
+      <label class="text-sm font-semibold">Mobile Number</label>
+      <input id="phone" class="w-full mt-1 mb-3 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-violet-500" placeholder="9999999999" />
+      <label class="text-sm font-semibold">Password</label>
+      <input id="password" type="password" class="w-full mt-1 mb-4 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:border-violet-500" placeholder="••••••••" />
+      <button onclick="login()" class="w-full py-3 rounded-xl text-white font-bold" style="background:var(--p)">Sign In</button>
+      <p id="loginErr" class="text-sm text-red-500 mt-3 hidden"></p>
+      <p class="text-xs text-slate-400 mt-4 text-center">Demo: 9999999999 / admin123</p>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="app" class="hidden">
+    <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-lg flex items-center justify-center text-white" style="background:var(--p)">🖨️</div>
+        <div class="text-lg font-extrabold"><span>Print</span><span style="color:var(--p)">Hub</span> <span class="text-slate-400 font-semibold text-sm">Admin</span></div>
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="text-xs text-slate-400">Auto-refreshes every 15s</span>
+        <button onclick="logout()" class="text-sm font-semibold text-red-500">Logout</button>
+      </div>
+    </header>
+
+    <main class="p-6 max-w-6xl mx-auto">
+      <!-- Low paper alert -->
+      <div id="alert" class="hidden mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 flex items-center gap-3">
+        <span class="text-2xl">⚠️</span>
+        <div id="alertText" class="text-sm font-semibold text-amber-800"></div>
+      </div>
+
+      <!-- Metric cards -->
+      <div id="metrics" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"></div>
+
+      <!-- Kiosks -->
+      <h2 class="text-lg font-extrabold mb-3">Kiosks — Paper & Toner</h2>
+      <div id="kiosks" class="grid md:grid-cols-2 gap-4 mb-8"></div>
+
+      <!-- Orders -->
+      <h2 class="text-lg font-extrabold mb-3">Recent Orders</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-slate-500 text-left">
+              <tr>
+                <th class="px-4 py-3 font-semibold">Order</th>
+                <th class="px-4 py-3 font-semibold">Student</th>
+                <th class="px-4 py-3 font-semibold">File</th>
+                <th class="px-4 py-3 font-semibold">Pages</th>
+                <th class="px-4 py-3 font-semibold">Amount</th>
+                <th class="px-4 py-3 font-semibold">Status</th>
+                <th class="px-4 py-3 font-semibold">Date</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const API = location.origin + "/api";
+    let token = localStorage.getItem("ph_admin_token") || "";
+    let timer = null;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, {
+        method: opts.method || "GET",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      if (res.status === 401 || res.status === 403) { logout(); throw new Error("Unauthorized"); }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Error");
+      return res.json();
+    }
+
+    async function login() {
+      const phone = document.getElementById("phone").value.trim();
+      const password = document.getElementById("password").value;
+      const err = document.getElementById("loginErr");
+      err.classList.add("hidden");
+      try {
+        const r = await fetch(API + "/auth/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone, password }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Login failed");
+        if (data.user.role !== "ADMIN") throw new Error("This account is not an admin.");
+        token = data.token;
+        localStorage.setItem("ph_admin_token", token);
+        showApp();
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    }
+
+    function logout() {
+      token = ""; localStorage.removeItem("ph_admin_token");
+      if (timer) clearInterval(timer);
+      document.getElementById("app").classList.add("hidden");
+      document.getElementById("login").classList.remove("hidden");
+    }
+
+    const rupees = (p) => "₹" + ((p || 0) / 100).toFixed(2);
+    const STATUS_COLORS = {
+      COMPLETED: "bg-green-100 text-green-700", PRINTING: "bg-amber-100 text-amber-700",
+      PAID: "bg-violet-100 text-violet-700", READY: "bg-violet-100 text-violet-700",
+      PENDING: "bg-slate-100 text-slate-600", FAILED: "bg-red-100 text-red-600", CANCELLED: "bg-red-100 text-red-600",
+    };
+
+    function metricCard(label, value, accent) {
+      return `<div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="text-2xl font-extrabold ${accent || ""}">${value}</div>
+        <div class="text-sm text-slate-400 mt-1">${label}</div></div>`;
+    }
+
+    function barColor(v) { return v > 40 ? "#1AA260" : v > 20 ? "#E08A00" : "#E5484D"; }
+
+    async function refresh() {
+      try {
+        const [m, k, o] = await Promise.all([
+          api("/admin/metrics"), api("/admin/kiosks"), api("/admin/orders"),
+        ]);
+
+        // Alert
+        const alert = document.getElementById("alert");
+        if (m.lowPaperCount > 0) {
+          document.getElementById("alertText").textContent =
+            `${m.lowPaperCount} kiosk(s) need a paper refill — check the highlighted kiosks below.`;
+          alert.classList.remove("hidden");
+        } else alert.classList.add("hidden");
+
+        // Metrics
+        document.getElementById("metrics").innerHTML = [
+          metricCard("Total Orders", m.totalOrders, "text-slate-900"),
+          metricCard("Revenue", rupees(m.totalRevenuePaise), "text-violet-600"),
+          metricCard("Prints Completed", m.completedPrints, "text-green-600"),
+          metricCard("Pages Printed", m.totalPagesPrinted, "text-slate-900"),
+          metricCard("Students", m.totalUsers, "text-slate-900"),
+          metricCard("Active Kiosks", m.activeKiosks + " / " + m.totalKiosks, "text-slate-900"),
+          metricCard("Failed Jobs", m.failedJobs, "text-red-600"),
+          metricCard("Orders Today", m.dailyOrders, "text-slate-900"),
+        ].join("");
+
+        // Kiosks
+        document.getElementById("kiosks").innerHTML = k.kiosks.map(kiosk => `
+          <div class="bg-white rounded-2xl border ${kiosk.needsPaper ? "border-amber-400" : "border-slate-200"} p-5">
+            <div class="flex items-center justify-between mb-3">
+              <div>
+                <div class="font-bold">${kiosk.name}</div>
+                <div class="text-xs text-slate-400">${kiosk.location}</div>
+              </div>
+              <span class="text-xs font-semibold px-2 py-1 rounded-lg ${kiosk.status === "ONLINE" ? "bg-green-100 text-green-700" : kiosk.status === "BUSY" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}">${kiosk.status}</span>
+            </div>
+            <div class="mb-2">
+              <div class="flex justify-between text-xs mb-1"><span class="text-slate-500">Paper ${kiosk.needsPaper ? "⚠️ refill needed" : ""}</span><span class="font-bold">${kiosk.paperLevel}%</span></div>
+              <div class="bar"><div style="width:${kiosk.paperLevel}%;background:${barColor(kiosk.paperLevel)}"></div></div>
+            </div>
+            <div class="mb-3">
+              <div class="flex justify-between text-xs mb-1"><span class="text-slate-500">Toner</span><span class="font-bold">${kiosk.tonerLevel}%</span></div>
+              <div class="bar"><div style="width:${kiosk.tonerLevel}%;background:${barColor(kiosk.tonerLevel)}"></div></div>
+            </div>
+            <button onclick="refill('${kiosk.id}')" class="w-full py-2 rounded-xl text-sm font-semibold text-white" style="background:var(--p)">Mark Refilled (100%)</button>
+          </div>`).join("");
+
+        // Orders
+        document.getElementById("ordersBody").innerHTML = o.orders.map(ord => `
+          <tr class="border-t border-slate-100">
+            <td class="px-4 py-3 font-mono text-xs">${ord.orderCode}</td>
+            <td class="px-4 py-3">${ord.user?.name || "-"}<div class="text-xs text-slate-400">${ord.user?.phone || ""}</div></td>
+            <td class="px-4 py-3 max-w-[160px] truncate">${ord.document?.fileName || "-"}</td>
+            <td class="px-4 py-3">${ord.pagesToPrint} × ${ord.copies}</td>
+            <td class="px-4 py-3 font-semibold">${rupees(ord.costPaise)}</td>
+            <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-1 rounded-lg ${STATUS_COLORS[ord.status] || "bg-slate-100"}">${ord.status}</span></td>
+            <td class="px-4 py-3 text-xs text-slate-400">${new Date(ord.createdAt).toLocaleString()}</td>
+          </tr>`).join("") || `<tr><td colspan="7" class="px-4 py-8 text-center text-slate-400">No orders yet.</td></tr>`;
+      } catch (e) { console.error(e); }
+    }
+
+    async function refill(id) {
+      await api("/admin/kiosks/" + id, { method: "PATCH", body: { paperLevel: 100, tonerLevel: 100, status: "ONLINE" } });
+      refresh();
+    }
+
+    function showApp() {
+      document.getElementById("login").classList.add("hidden");
+      document.getElementById("app").classList.remove("hidden");
+      refresh();
+      timer = setInterval(refresh, 15000);
+    }
+
+    // Auto-login if token present
+    if (token) showApp();
+  </script>
+</body>
+</html>

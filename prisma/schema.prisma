@@ -1,0 +1,179 @@
+// PrintHub — University Self-Service Printing Platform
+// Prisma schema (payments & cloud storage removed — free local printing)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------------
+
+enum Role {
+  STUDENT
+  OPERATOR
+  ADMIN
+}
+
+enum OrderStatus {
+  PAID          // created & confirmed (free — no payment step)
+  READY         // file ready, waiting for printer selection
+  PRINTING      // IoT device is printing
+  COMPLETED     // print delivered
+  FAILED        // print failed
+  CANCELLED
+}
+
+enum ColorMode {
+  BW
+  COLOR
+}
+
+enum SideMode {
+  SINGLE
+  DOUBLE
+}
+
+enum PrinterStatus {
+  ONLINE
+  OFFLINE
+  BUSY
+  ERROR
+  OUT_OF_PAPER
+  LOW_TONER
+}
+
+enum PrintJobStatus {
+  QUEUED
+  SENT          // pushed to IoT device
+  PRINTING
+  DONE
+  ERROR
+}
+
+// ------------------------------------------------------------------
+// MODELS
+// ------------------------------------------------------------------
+
+model User {
+  id         String   @id @default(cuid())
+  phone      String   @unique          // primary login identifier (mobile number)
+  email      String?  @unique          // optional college email
+  name       String
+  passwordHash String?                 // bcrypt hash (null for OTP-only users)
+  rollNumber String?  @unique          // university roll/student ID
+  role       Role     @default(STUDENT)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  documents     Document[]
+  orders        Order[]
+  notifications Notification[]
+
+  @@index([phone])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  orderId   String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, read])
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  userId    String
+  fileName  String
+  fileType  String   // pdf | docx | image
+  fileKey   String   // local filename in uploads/ directory
+  sizeBytes Int
+  pageCount Int      @default(1)
+  deleted   Boolean  @default(false)  // set true after auto-delete post-print
+  createdAt DateTime @default(now())
+
+  user  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order?
+
+  @@index([userId])
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  orderCode  String      @unique          // short human/QR code e.g. PH-8F3A2K
+  userId     String
+  documentId String      @unique
+  printerId  String?
+
+  // print configuration
+  colorMode ColorMode @default(BW)
+  sideMode  SideMode  @default(SINGLE)
+  copies    Int       @default(1)
+  pageRange String    @default("all")     // "all" or "1-3,5"
+  pageColorModes String?                  // e.g. "1:BW,2:COLOR"
+  pagesToPrint Int    @default(1)         // total pages to print
+  costPaise    Int    @default(0)         // price in paise
+
+  status     OrderStatus @default(PAID)
+  printToken String      @unique          // secure token used by IoT to fetch file
+  qrData     String?                      // QR payload
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document Document  @relation(fields: [documentId], references: [id])
+  printer  Printer?  @relation(fields: [printerId], references: [id])
+  printJob PrintJob?
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Printer {
+  id          String        @id @default(cuid())
+  name        String
+  location    String        // building / block / floor
+  deviceId    String        @unique        // IoT device (Raspberry Pi) id for MQTT topic
+  status      PrinterStatus @default(OFFLINE)
+  paperLevel  Int           @default(100)   // %
+  tonerLevel  Int           @default(100)   // %
+  lastSeenAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  orders    Order[]
+  printJobs PrintJob[]
+
+  @@index([status])
+}
+
+model PrintJob {
+  id         String         @id @default(cuid())
+  orderId    String         @unique
+  printerId  String
+  status     PrintJobStatus @default(QUEUED)
+  attempts   Int            @default(0)
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  printer Printer @relation(fields: [printerId], references: [id])
+
+  @@index([status])
+}
