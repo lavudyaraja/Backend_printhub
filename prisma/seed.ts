@@ -15,7 +15,7 @@ async function main() {
   const kiosks = [
     { deviceId: "cuh-library-01", name: "PrintHub Kiosk – Central Library", location: "Central Library, Central University of Haryana, Mahendergarh", status: "ONLINE" as const, paperLevel: 92, tonerLevel: 78 },
     { deviceId: "cuh-acadblock-01", name: "PrintHub Kiosk – Academic Block", location: "Academic Block, Central University of Haryana, Mahendergarh", status: "ONLINE" as const, paperLevel: 64, tonerLevel: 55 },
-    { deviceId: "cuh-boyshostel-01", name: "PrintHub Kiosk – Boys Hostel", location: "Boys Hostel, Central University of Haryana, Mahendergarh", status: "BUSY" as const, paperLevel: 40, tonerLevel: 33 },
+    { deviceId: "cuh-hostel-01", name: "PrintHub Kiosk – Boys Hostel", location: "Boys Hostel, Central University of Haryana, Mahendergarh", status: "BUSY" as const, paperLevel: 40, tonerLevel: 33 },
     { deviceId: "cuh-admin-01", name: "PrintHub Kiosk – Admin Block", location: "Administrative Block, Central University of Haryana, Mahendergarh", status: "OFFLINE" as const, paperLevel: 0, tonerLevel: 12 },
   ];
   for (const k of kiosks) {
@@ -24,8 +24,10 @@ async function main() {
   // Remove the old placeholder kiosk if present (ignore if referenced by orders).
   try {
     await prisma.printer.deleteMany({ where: { deviceId: "kiosk-lib-01" } });
+    await prisma.printer.deleteMany({ where: { deviceId: "cuh-boyshostel-01" } });
   } catch {
     await prisma.printer.updateMany({ where: { deviceId: "kiosk-lib-01" }, data: { status: "OFFLINE" } });
+    await prisma.printer.updateMany({ where: { deviceId: "cuh-boyshostel-01" }, data: { status: "OFFLINE" } });
   }
 
   console.log("Seed complete.");

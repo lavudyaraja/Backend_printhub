@@ -15,11 +15,15 @@ import { kioskRouter } from "./routes/kiosk";
 import { printersRouter } from "./routes/printers";
 import { adminRouter } from "./routes/admin";
 import { notificationsRouter } from "./routes/notifications";
+import { supportRouter } from "./routes/support";
+import { walletRouter } from "./routes/wallet";
 
 import { initRealtime } from "./services/realtime";
 import { initMqtt } from "./lib/mqtt";
 import { handleJobResult } from "./services/printQueue";
 import { startCleanup } from "./lib/cleanup";
+import { startKioskMonitor } from "./lib/kioskMonitor";
+import { storageConfigured } from "./lib/storage";
 
 const app = express();
 app.set("trust proxy", 1); // behind Railway/Render/Nginx proxy — needed for rate-limit + secure cookies
@@ -54,6 +58,8 @@ app.use("/api/kiosk", kioskRouter);
 app.use("/api/printers", printersRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/support", supportRouter);
+app.use("/api/wallet", walletRouter);
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -67,6 +73,15 @@ try {
 }
 
 startCleanup();
+startKioskMonitor();
+
+// Storage is required for uploads/printing — warn loudly if B2 isn't configured.
+if (!storageConfigured()) {
+  console.warn(
+    "[storage] ⚠ Backblaze B2 not configured — uploads & printing will fail. " +
+      "Set B2_ENDPOINT, B2_REGION, B2_BUCKET, B2_KEY_ID, B2_APP_KEY."
+  );
+}
 
 const PORT = Number(process.env.PORT || 4000);
 server.listen(PORT, () => console.log(`[printhub] backend on :${PORT}`));

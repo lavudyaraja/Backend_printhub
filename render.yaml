@@ -20,6 +20,16 @@ services:
         sync: false                # paste your Neon connection string
       - key: MQTT_URL
         sync: false                # mqtts://user:pass@host:8883 (HiveMQ)
+      - key: B2_ENDPOINT
+        sync: false                # https://s3.us-east-005.backblazeb2.com
+      - key: B2_REGION
+        sync: false                # us-east-005
+      - key: B2_BUCKET
+        sync: false                # your bucket name
+      - key: B2_KEY_ID
+        sync: false                # Backblaze application keyID
+      - key: B2_APP_KEY
+        sync: false                # Backblaze applicationKey (K005…)
       - key: BACKEND_URL
         sync: false                # https://printhub-backend.onrender.com
       - key: CORS_ORIGINS

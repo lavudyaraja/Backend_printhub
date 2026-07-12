@@ -8,6 +8,8 @@ import { prisma } from "../lib/prisma";
 import { requireAuth, AuthedRequest } from "../middleware/authGuard";
 import { enqueuePrint, dispatchToPrinter } from "../services/printQueue";
 import { createNotification } from "../lib/notify";
+import { sendEmail, orderReceiptEmail } from "../lib/mailer";
+import { debitWallet } from "./wallet";
 
 export const ordersRouter = Router();
 
@@ -97,6 +99,7 @@ const configSchema = z.object({
   pageRange: z.string().default("all"),
   pageColorModes: z.string().optional(),
   printerId: z.string().optional(),
+  payWithWallet: z.boolean().optional(), // deduct order cost from wallet balance
 });
 
 // Create order — immediately PAID (free printing, no payment step).
@@ -175,12 +178,40 @@ ordersRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
     },
   });
 
+  // Optional wallet payment: deduct the order cost from the prepaid balance.
+  // If the balance is short, roll back the order and ask the user to top up.
+  if (c.payWithWallet && costPaise > 0) {
+    try {
+      await debitWallet(order.userId, costPaise, `Print order ${order.orderCode}`, order.id);
+    } catch (e: any) {
+      await prisma.order.delete({ where: { id: order.id } });
+      if (e.message === "INSUFFICIENT_FUNDS") {
+        return res.status(402).json({ error: "Insufficient wallet balance. Please top up.", needTopup: true });
+      }
+      throw e;
+    }
+  }
+
   await createNotification(
     order.userId,
     "Order placed",
     `Order ${order.orderCode} created — scan your QR at any kiosk to print.`,
     order.id
   );
+
+  // Order receipt email (best-effort — only if the buyer has an email on file).
+  const buyer = await prisma.user.findUnique({ where: { id: order.userId } });
+  if (buyer?.email) {
+    const { subject, html } = orderReceiptEmail({
+      name: buyer.name,
+      orderCode: order.orderCode,
+      pages: order.pagesToPrint,
+      copies: order.copies,
+      colorMode: order.colorMode,
+      amountPaise: order.costPaise ?? 0,
+    });
+    sendEmail(buyer.email, subject, html);
+  }
 
   // If a printer was pre-selected, enqueue immediately.
   if (c.printerId) await enqueuePrint(order.id);

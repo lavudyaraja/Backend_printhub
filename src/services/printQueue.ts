@@ -1,12 +1,10 @@
 // Print queue: turns a PAID order into a PrintJob and pushes it to the IoT device via MQTT.
-// Files are served over HTTP from local disk — no cloud storage.
-import path from "path";
+// Files live in Backblaze B2; the agent downloads them via a short-lived signed URL.
 import { prisma } from "../lib/prisma";
 import { publishJob } from "../lib/mqtt";
 import { emitOrderUpdate } from "./realtime";
 import { createNotification, statusNotification } from "../lib/notify";
-
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:4000";
+import { presignGet, deleteFileAndPreviews } from "../lib/storage";
 
 // Emit realtime status + persist a notification in one call.
 async function pushStatus(userId: string, orderId: string, orderCode: string, status: string) {
@@ -39,14 +37,27 @@ export async function dispatchToPrinter(orderId: string) {
   });
   if (!order || !order.printer || !order.document) return;
 
+  // ── Duplicate-print guard ────────────────────────────────────────
+  // Atomically "claim" the order: only transition PAID/READY -> PRINTING.
+  // If another scan/request already claimed it, updateMany affects 0 rows and
+  // we stop here, so the job is published to MQTT exactly once.
+  const claim = await prisma.order.updateMany({
+    where: { id: orderId, status: { in: ["PAID", "READY"] } },
+    data: { status: "PRINTING" },
+  });
+  if (claim.count === 0) {
+    console.log(`[queue] order ${orderId} already claimed — skipping duplicate dispatch`);
+    return;
+  }
+
   const job = await prisma.printJob.upsert({
     where: { orderId },
     update: { status: "SENT", attempts: { increment: 1 }, printerId: order.printerId! },
     create: { orderId, printerId: order.printerId!, status: "SENT", attempts: 1 },
   });
 
-  // Local HTTP URL — IoT device downloads the file directly from the backend.
-  const fileUrl = `${BACKEND_URL}/api/documents/file/${order.document.fileKey}`;
+  // Short-lived B2 signed URL — the IoT device downloads directly from storage.
+  const fileUrl = await presignGet(order.document.fileKey, 15 * 60);
 
   publishJob(order.printer.deviceId, {
     jobId: job.id,
@@ -86,28 +97,12 @@ export async function handleJobResult(payload: {
     });
     await prisma.order.update({ where: { id: payload.orderId }, data: { status: "COMPLETED" } });
 
-    // Delete local file after successful print.
+    // Delete the file from B2 immediately after a successful print (temp buffer).
     if (order.document && !order.document.deleted) {
       try {
-        const { unlinkSync, existsSync, readdirSync } = await import("fs");
-        const uploadsDir = path.join(__dirname, "../../uploads");
-        const filePath = path.join(uploadsDir, order.document.fileKey);
-        
-        // Delete original file
-        if (existsSync(filePath)) unlinkSync(filePath);
-        
-        // Delete page preview images
-        if (existsSync(uploadsDir)) {
-          const files = readdirSync(uploadsDir);
-          for (const file of files) {
-            if (file.startsWith(`${order.document.fileKey}_page_`)) {
-              const previewPath = path.join(uploadsDir, file);
-              if (existsSync(previewPath)) unlinkSync(previewPath);
-            }
-          }
-        }
+        await deleteFileAndPreviews(order.document.fileKey);
       } catch (e) {
-        console.error("[cleanup] failed to delete local file", order.document.fileKey, e);
+        console.error("[cleanup] failed to delete B2 file", order.document.fileKey, e);
       }
       await prisma.document.update({
         where: { id: order.document.id },

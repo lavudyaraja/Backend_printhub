@@ -10,13 +10,21 @@ let client: MqttClient;
 
 export function initMqtt(onJobUpdate: (payload: any) => void) {
   // mqtt.connect handles mqtts:// (TLS) and user:pass@host auth from the URL.
-  client = mqtt.connect(config.mqttUrl, { reconnectPeriod: 3000 });
+  client = mqtt.connect(config.mqttUrl, {
+    reconnectPeriod: 3000, // auto-retry every 3s while disconnected
+    connectTimeout: 30_000,
+    keepalive: 60,
+    clean: true,
+  });
 
   client.on("connect", () => {
     console.log("[mqtt] connected");
     client.subscribe("printhub/printer/+/status");
     client.subscribe("printhub/printer/+/job-result");
   });
+  client.on("reconnect", () => console.log("[mqtt] reconnecting…"));
+  client.on("offline", () => console.warn("[mqtt] offline"));
+  client.on("error", (err) => console.error("[mqtt] error", err.message));
 
   client.on("message", async (topic, message) => {
     try {

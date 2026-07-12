@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/auth";
 import { requireAuth, AuthedRequest } from "../middleware/authGuard";
+import { sendEmail, otpEmail, welcomeEmail, loginAlertEmail } from "../lib/mailer";
 
 export const authRouter = Router();
 
@@ -14,7 +15,6 @@ const isProd = process.env.NODE_ENV === "production";
 
 // phone -> { code, expires }
 const resetCodes = new Map<string, { code: string; expires: number }>();
-const otpCodes = new Map<string, { code: string; expires: number }>();
 
 const phone = z
   .string()
@@ -46,12 +46,18 @@ const registerSchema = z.object({
   email: emailOpt,
   password,
   rollNumber: z.string().optional(),
+  // Play Store compliance: user must accept Privacy Policy + Terms at signup.
+  consent: z.boolean().optional(),
 });
 
 authRouter.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: firstError(parsed.error) });
-  const { name, phone: ph, email, password: pw, rollNumber } = parsed.data;
+  const { name, phone: ph, email, password: pw, rollNumber, consent } = parsed.data;
+
+  if (consent === false) {
+    return res.status(400).json({ error: "You must accept the Privacy Policy and Terms of Service" });
+  }
 
   const existing = await prisma.user.findUnique({ where: { phone: ph } });
   if (existing) return res.status(409).json({ error: "This mobile number is already registered" });
@@ -60,6 +66,12 @@ authRouter.post("/register", async (req, res) => {
   const user = await prisma.user.create({
     data: { name, phone: ph, email: email || null, passwordHash, rollNumber: rollNumber || null },
   });
+
+  // Welcome email (best-effort — never blocks signup; no-op if Brevo unset).
+  if (user.email) {
+    const { subject, html } = welcomeEmail(user.name);
+    sendEmail(user.email, subject, html);
+  }
 
   const token = signToken({ userId: user.id, role: user.role });
   res.json({ token, user: safeUser(user) });
@@ -107,39 +119,12 @@ authRouter.post("/login", async (req, res) => {
   const ok = await bcrypt.compare(pw, user.passwordHash);
   if (!ok) return res.status(401).json({ error: "Invalid mobile number or password" });
 
-  const token = signToken({ userId: user.id, role: user.role });
-  res.json({ token, user: safeUser(user) });
-});
-
-// ── OTP login: request code ────────────────────────────────────────
-authRouter.post("/otp/request", async (req, res) => {
-  const parsed = z.object({ phone }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: firstError(parsed.error) });
-  const ph = parsed.data.phone;
-  const code = newCode();
-  otpCodes.set(ph, { code, expires: Date.now() + 5 * 60 * 1000 });
-  console.log(`[otp] ${ph} -> ${code}`);
-  // TODO: send `code` via SMS provider.
-  res.json({ sent: true, devCode: isProd ? undefined : code });
-});
-
-// ── OTP login: verify code (auto-registers new numbers) ────────────
-authRouter.post("/otp/verify", async (req, res) => {
-  const parsed = z.object({ phone, code: z.string().length(6), name: z.string().optional() }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: firstError(parsed.error) });
-  const { phone: ph, code, name } = parsed.data;
-
-  const entry = otpCodes.get(ph);
-  if (!entry || entry.expires < Date.now() || entry.code !== code) {
-    return res.status(400).json({ error: "Invalid or expired OTP" });
+  // Login-alert email (best-effort — never blocks login; no-op if Brevo unset).
+  if (user.email) {
+    const { subject, html } = loginAlertEmail(user.name);
+    sendEmail(user.email, subject, html);
   }
-  otpCodes.delete(ph);
 
-  const user = await prisma.user.upsert({
-    where: { phone: ph },
-    update: {},
-    create: { phone: ph, name: name?.trim() || "Student" },
-  });
   const token = signToken({ userId: user.id, role: user.role });
   res.json({ token, user: safeUser(user) });
 });
@@ -152,14 +137,19 @@ authRouter.post("/forgot-password", async (req, res) => {
 
   const user = await prisma.user.findUnique({ where: { phone: ph } });
   const code = newCode();
+  let delivered = false;
   if (user) {
     resetCodes.set(ph, { code, expires: Date.now() + 10 * 60 * 1000 });
-    console.log(`[reset] ${ph} -> ${code}`);
+    if (user.email) {
+      const { subject, html } = otpEmail(code, "reset");
+      delivered = await sendEmail(user.email, subject, html);
+    }
   }
   res.json({
     sent: true,
     message: "If an account exists, a reset code has been sent.",
-    devCode: isProd ? undefined : user ? code : undefined,
+    // Dev-only convenience: reveal the code when no real SMS provider is set.
+    devCode: delivered || isProd ? undefined : user ? code : undefined,
   });
 });
 
@@ -211,5 +201,21 @@ authRouter.patch("/me", requireAuth, async (req: AuthedRequest, res) => {
   } catch (e: any) {
     if (e.code === "P2002") return res.status(409).json({ error: "Email or roll number already in use" });
     res.status(500).json({ error: "Could not update profile" });
+  }
+});
+
+// ── Delete account + all associated data (Play Store data-deletion) ─
+// Cascades to the user's documents, orders, print jobs and notifications
+// via the onDelete: Cascade relations in the Prisma schema.
+authRouter.delete("/me", requireAuth, async (req: AuthedRequest, res) => {
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : undefined;
+  try {
+    await prisma.user.delete({ where: { id: req.user!.userId } });
+    console.log(`[account-deletion] user ${req.user!.userId} deleted${reason ? ` — reason: ${reason}` : ""}`);
+    res.json({ deleted: true });
+  } catch (e: any) {
+    if (e.code === "P2025") return res.status(404).json({ error: "Account not found" });
+    console.error("[account-deletion] failed", e);
+    res.status(500).json({ error: "Could not delete account. Please email support." });
   }
 });

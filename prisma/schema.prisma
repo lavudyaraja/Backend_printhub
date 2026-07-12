@@ -56,6 +56,11 @@ enum PrintJobStatus {
   ERROR
 }
 
+enum WalletTxnType {
+  CREDIT        // top-up / refund
+  DEBIT         // spent on a print order
+}
+
 // ------------------------------------------------------------------
 // MODELS
 // ------------------------------------------------------------------
@@ -68,14 +73,32 @@ model User {
   passwordHash String?                 // bcrypt hash (null for OTP-only users)
   rollNumber String?  @unique          // university roll/student ID
   role       Role     @default(STUDENT)
+  walletBalancePaise Int @default(0)    // prepaid wallet balance (paise)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   documents     Document[]
   orders        Order[]
   notifications Notification[]
+  walletTxns    WalletTransaction[]
 
   @@index([phone])
+}
+
+model WalletTransaction {
+  id           String        @id @default(cuid())
+  userId       String
+  type         WalletTxnType
+  amountPaise  Int                       // always positive; `type` gives direction
+  balancePaise Int                       // wallet balance immediately after this txn
+  description  String
+  orderId      String?                   // set for print debits
+  createdAt    DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, createdAt])
 }
 
 model Notification {
