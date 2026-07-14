@@ -4,7 +4,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { prisma } from "../lib/prisma";
-import { config } from "../lib/config";
+import { config, publicBaseUrl } from "../lib/config";
 import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
 import { createRazorpayOrder, verifyPaymentSignature, checkoutPage } from "../lib/razorpay";
 
@@ -66,8 +66,17 @@ ordersRouter.post("/from-temp", requireAuth, async (req: AuthedRequest, res) => 
   }
   const pagesToPrint = modes.length;
   const perCopy = modes.reduce((acc, m) => acc + (m.mode === "COLOR" ? color : bw), 0);
-  const costPaise = perCopy * d.copies;
+  const listPaise = perCopy * d.copies;
   const anyColor = modes.some((m) => m.mode === "COLOR");
+
+  // Paying from the Prinsta wallet earns a discount; paying directly (UPI/card)
+  // is charged the full rate. Computed here, on the server — the client's number
+  // is only ever a preview.
+  const payingFromWallet = d.payWithWallet || d.paymentMethod === "WALLET";
+  const discountPaise = payingFromWallet
+    ? Math.floor((listPaise * config.walletDiscountPercent) / 100)
+    : 0;
+  const costPaise = listPaise - discountPaise;
 
   const baseData = {
     orderCode: "PRT-" + nanoid(6).toUpperCase(),
@@ -131,7 +140,7 @@ ordersRouter.get("/checkout", async (req, res) => {
       amountPaise: order.costPaise,
       name: "Prinsta",
       description: `Print order ${order.orderCode}`,
-      verifyPath: `${config.backendUrl}/api/orders/verify`,
+      verifyPath: `${publicBaseUrl(req)}/api/orders/verify`,
       token: token || "",
     })
   );

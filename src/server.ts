@@ -27,6 +27,11 @@ app.use(express.json({ limit: "2mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prinsta-admin-backend" }));
 
+// Public, non-secret settings the clients need to render prices correctly.
+app.get("/api/config", (_req, res) =>
+  res.json({ walletDiscountPercent: config.walletDiscountPercent })
+);
+
 // Throttle auth endpoints to stop brute-force abuse.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

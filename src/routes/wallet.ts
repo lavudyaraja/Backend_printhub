@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { config } from "../lib/config";
+import { config, publicBaseUrl } from "../lib/config";
 import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
 import { createRazorpayOrder, fetchRazorpayOrder, verifyPaymentSignature, checkoutPage } from "../lib/razorpay";
 
@@ -46,7 +46,7 @@ walletRouter.get("/checkout", async (req, res) => {
       amountPaise: rz.amount,
       name: "Prinsta Wallet",
       description: `Wallet top-up ₹${(rz.amount / 100).toFixed(2)}`,
-      verifyPath: `${config.backendUrl}/api/wallet/verify`,
+      verifyPath: `${publicBaseUrl(req)}/api/wallet/verify`,
       token: token || "",
     })
   );

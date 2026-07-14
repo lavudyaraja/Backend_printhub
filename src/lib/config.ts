@@ -40,7 +40,25 @@ export const config = {
 
   // Upload limits
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 50 * 1024 * 1024), // 50 MB
+
+  // Paying from the Prinsta wallet is cheaper than paying directly — it saves us
+  // the payment-gateway fee, so the saving is passed back to the user.
+  walletDiscountPercent: Math.min(100, Math.max(0, Number(process.env.WALLET_DISCOUNT_PERCENT || 10))),
 };
+
+/**
+ * The URL clients should call us back on, derived from the request that is
+ * already reaching us. BACKEND_URL wins when set, but without this the default
+ * would be http://localhost:4000 — which resolves to nothing on a user's phone,
+ * so the hosted checkout page could never post its payment result back.
+ */
+export function publicBaseUrl(req: { headers: Record<string, any>; protocol?: string }): string {
+  if (process.env.BACKEND_URL) return process.env.BACKEND_URL.replace(/\/+$/, "");
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  if (!host) return config.backendUrl;
+  const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0] || req.protocol || "https";
+  return `${proto}://${host}`;
+}
 
 // Validate at import time so the app refuses to boot with unsafe prod config.
 if (isProd) {
