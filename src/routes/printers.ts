@@ -29,6 +29,7 @@ const printerSchema = z.object({
   serialNumber: z.string().optional(),
   ipAddress: z.string().min(7),
   macAddress: z.string().optional(),
+  wifiSsid: z.string().optional(),
   accessPassword: z.string().optional(),
   locationName: z.string().min(2),
   shopName: z.string().min(2),
@@ -99,6 +100,9 @@ printersRouter.get("/connect/:uniquePrinterId", requireAuth, async (req, res) =>
       status: true, locationName: true, shopName: true,
       supportedPaperSizes: true, colorPrinting: true, duplexPrinting: true,
       costPerBWPagePaise: true, costPerColorPagePaise: true,
+      // Network details the app uses to join the printer's Wi-Fi Direct and send
+      // the IPP print job directly (no discovery — everything comes from here).
+      ipAddress: true, wifiSsid: true, accessPassword: true,
     },
   });
   if (!printer) {
@@ -149,6 +153,7 @@ printersRouter.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => 
       serialNumber: data.serialNumber || null,
       ipAddress: data.ipAddress,
       macAddress: data.macAddress || null,
+      wifiSsid: data.wifiSsid || null,
       accessPassword: data.accessPassword || null,
       locationName: data.locationName,
       shopName: data.shopName,
@@ -187,6 +192,7 @@ printersRouter.put("/:id", requireAuth, requireRole("ADMIN"), async (req, res) =
         ...(data.serialNumber !== undefined ? { serialNumber: data.serialNumber } : {}),
         ...(data.ipAddress !== undefined ? { ipAddress: data.ipAddress } : {}),
         ...(data.macAddress !== undefined ? { macAddress: data.macAddress } : {}),
+        ...(data.wifiSsid !== undefined ? { wifiSsid: data.wifiSsid || null } : {}),
         ...(data.accessPassword !== undefined ? { accessPassword: data.accessPassword || null } : {}),
         ...(data.locationName !== undefined ? { locationName: data.locationName } : {}),
         ...(data.shopName !== undefined ? { shopName: data.shopName } : {}),

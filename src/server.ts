@@ -11,6 +11,7 @@ import { adminRouter } from "./routes/admin";
 import { documentsRouter } from "./routes/documents";
 import { ordersRouter } from "./routes/orders";
 import { walletRouter } from "./routes/wallet";
+import { notificationsRouter } from "./routes/notifications";
 import { startCleanup } from "./lib/cleanup";
 
 const app = express();
@@ -41,6 +42,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/wallet", walletRouter);
+app.use("/api/notifications", notificationsRouter);
 
 startCleanup();
 

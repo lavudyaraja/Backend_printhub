@@ -84,6 +84,7 @@ model User {
   rollNumber        String?  @unique
   role              Role     @default(STUDENT)
   walletBalancePaise Int     @default(0)
+  emailNotifications Boolean @default(true) // receive order + login emails
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -197,7 +198,8 @@ model Printer {
   serialNumber   String?
   ipAddress      String
   macAddress     String?
-  accessPassword String?       // printer WiFi/admin password — admin-only, never exposed to end users
+  wifiSsid       String?       // Wi-Fi Direct SSID the printer broadcasts, e.g. "DIRECT-Pantum-BP5100"
+  accessPassword String?       // Wi-Fi Direct join password (shared with the app to connect + print)
 
   // Status
   status         PrinterStatus @default(OFFLINE)

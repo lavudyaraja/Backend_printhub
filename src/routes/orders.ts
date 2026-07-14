@@ -185,8 +185,9 @@ ordersRouter.get("/:id", requireAuth, async (req: AuthedRequest, res) => {
   const order = await prisma.order.findFirst({
     where: { id: req.params.id, userId: req.user!.userId },
     include: {
-      document: { select: { fileName: true, fileType: true, pageCount: true } },
-      printer: { select: { name: true, shopName: true, brand: true, locationName: true } },
+      document: { select: { id: true, fileName: true, fileType: true, pageCount: true } },
+      // Network details so the app can print directly over the printer's Wi-Fi Direct.
+      printer: { select: { name: true, shopName: true, brand: true, locationName: true, ipAddress: true, wifiSsid: true, accessPassword: true } },
       printJob: { select: { status: true } },
     },
   });

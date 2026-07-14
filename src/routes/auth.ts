@@ -185,7 +185,7 @@ authRouter.post("/login", async (req, res) => {
   if (!ok) return res.status(401).json({ error: "Invalid mobile number or password" });
 
   // Login-alert email (best-effort — never blocks login; no-op if Brevo unset).
-  if (user.email) {
+  if (user.email && user.emailNotifications) {
     const { subject, html } = loginAlertEmail(user.name);
     sendEmail(user.email, subject, html);
   }
@@ -247,12 +247,13 @@ const updateSchema = z.object({
   name: z.string().min(2).optional(),
   email: emailOpt,
   rollNumber: z.string().optional(),
+  emailNotifications: z.boolean().optional(),
 });
 
 authRouter.patch("/me", requireAuth, async (req: AuthedRequest, res) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: firstError(parsed.error) });
-  const { name, email, rollNumber } = parsed.data;
+  const { name, email, rollNumber, emailNotifications } = parsed.data;
   try {
     const user = await prisma.user.update({
       where: { id: req.user!.userId },
@@ -260,6 +261,7 @@ authRouter.patch("/me", requireAuth, async (req: AuthedRequest, res) => {
         ...(name !== undefined ? { name } : {}),
         ...(email !== undefined ? { email: email || null } : {}),
         ...(rollNumber !== undefined ? { rollNumber: rollNumber || null } : {}),
+        ...(emailNotifications !== undefined ? { emailNotifications } : {}),
       },
     });
     res.json({ user: safeUser(user) });
