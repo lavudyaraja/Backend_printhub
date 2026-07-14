@@ -17,8 +17,6 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true        # Render generates a strong secret
-      - key: ADMIN_SIGNUP_CODE
-        sync: false                # set your own in the dashboard
       - key: DATABASE_URL
         sync: false                # paste your Neon connection string
       - key: GOOGLE_CLIENT_ID
