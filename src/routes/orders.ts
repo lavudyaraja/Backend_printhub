@@ -186,6 +186,29 @@ ordersRouter.post("/verify", requireAuth, async (req: AuthedRequest, res) => {
   res.json({ ok: true, orderId: order.id });
 });
 
+// ── Simulate a successful payment (TEST MODE ONLY) ──────────────────────────
+// Real UPI apps (GPay/PhonePe) cannot complete a Razorpay *test* payment, so
+// there is no way to exercise the "paid → printout" flow end-to-end with test
+// keys. This marks a pending order PAID directly. It is hard-gated to test mode:
+// the moment live keys (rzp_live_…) are set, this route refuses and the app
+// falls back to the real Razorpay checkout.
+ordersRouter.post("/:id/simulate-pay", requireAuth, async (req: AuthedRequest, res) => {
+  if (config.razorpay.mode !== "test") {
+    return res.status(403).json({ error: "Simulated payments are disabled in live mode." });
+  }
+  const order = await prisma.order.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  if (order.status === "PENDING_PAYMENT") {
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: order.id }, data: { status: "PAID", razorpayPaymentId: "test_" + nanoid(12) } });
+      if (order.printerId) await tx.printJob.create({ data: { orderId: order.id, printerId: order.printerId, status: "QUEUED" } });
+    });
+  }
+
+  res.json({ ok: true, orderId: order.id, test: true });
+});
+
 // ── List the user's orders ──────────────────────────────────────────────────
 ordersRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
   const orders = await prisma.order.findMany({
