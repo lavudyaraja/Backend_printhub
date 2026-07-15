@@ -6,6 +6,7 @@ import multer from "multer";
 import { PDFDocument } from "pdf-lib";
 import { prisma } from "../lib/prisma";
 import { config } from "../lib/config";
+import { imageToUrf } from "../lib/urf";
 import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
 
 export const documentsRouter = Router();
@@ -139,6 +140,21 @@ async function serveFile(req: any, res: any) {
       if (subset) body = subset;
     } catch (e) {
       console.error("[documents] pdf subset failed, serving full file:", e);
+    }
+  }
+
+  // ?format=urf → the app wants Apple Raster so it can print the image directly
+  // over IPP (no OS dialog). Only images can be rasterised this way.
+  if (req.query.format === "urf" && doc.fileType === "image") {
+    try {
+      const urf = await imageToUrf(Buffer.from(body));
+      res.setHeader("Content-Type", "image/urf");
+      res.setHeader("Content-Disposition", `inline; filename="print.urf"`);
+      res.setHeader("Cache-Control", "public, max-age=600");
+      return res.send(urf);
+    } catch (e) {
+      console.error("[documents] image→urf failed:", e);
+      return res.status(500).json({ error: "Could not rasterise the image for printing." });
     }
   }
 
