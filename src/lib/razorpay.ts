@@ -74,6 +74,7 @@ export function checkoutPage(opts: {
   description: string;
   verifyPath: string; // absolute URL to POST the payment result to
   token: string;
+  image?: string; // logo shown in the Razorpay checkout (replaces the "P" avatar)
   prefillContact?: string;
   prefillEmail?: string;
   extra?: Record<string, string>;
@@ -84,6 +85,7 @@ export function checkoutPage(opts: {
     amount: opts.amountPaise,
     name: opts.name,
     description: opts.description,
+    image: opts.image || "",
     verifyUrl: opts.verifyPath,
     token: opts.token,
     prefillContact: opts.prefillContact || "",
@@ -135,8 +137,14 @@ export function checkoutPage(opts: {
     currency: "INR",
     name: cfg.name,
     description: cfg.description,
+    image: cfg.image || undefined,
     prefill: { contact: cfg.prefillContact, email: cfg.prefillEmail },
     theme: { color: "#6D4AFF" },
+    // Only offer methods that complete in-page ("handler mode"). Netbanking,
+    // wallets and pay-later use a full-page redirect that navigates the WebView
+    // away from this page, destroying the verify script → "network error during
+    // verification". Restricting to UPI + card keeps the whole flow in one page.
+    method: { upi: true, card: true, netbanking: false, wallet: false, paylater: false, emi: false },
     handler: function(response){ verify(response); },
     modal: { ondismiss: function(){ post({ status: "cancelled" }); } }
   };

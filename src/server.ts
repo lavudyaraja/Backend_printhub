@@ -1,4 +1,5 @@
 import "dotenv/config";
+import path from "path";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -24,6 +25,9 @@ app.use(
 );
 // JSON body (large enough for base64-free payloads). File uploads use multer per-route.
 app.use(express.json({ limit: "2mb" }));
+
+// Public static assets (e.g. logo.png used on the Razorpay checkout page).
+app.use(express.static(path.join(process.cwd(), "public"), { maxAge: "7d" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prinsta-admin-backend" }));
 

@@ -47,10 +47,20 @@ ordersRouter.post("/from-temp", requireAuth, async (req: AuthedRequest, res) => 
 
   const doc = await prisma.document.findFirst({
     where: { id: d.tempKey, userId, deleted: false },
-    include: { order: { select: { id: true } } },
+    include: { order: { select: { id: true, status: true } } },
   });
   if (!doc) return res.status(410).json({ error: "SESSION_EXPIRED" });
-  if (doc.order) return res.status(409).json({ error: "This document already has an order." });
+  // An unpaid (PENDING_PAYMENT) order means a previous UPI attempt was cancelled
+  // or failed. It never created a PrintJob or moved money, so it is disposable —
+  // clear it so the user can retry (possibly with changed options). Only a real,
+  // committed order (PAID or beyond) blocks re-ordering the same document.
+  if (doc.order) {
+    if (doc.order.status === "PENDING_PAYMENT") {
+      await prisma.order.delete({ where: { id: doc.order.id } });
+    } else {
+      return res.status(409).json({ error: "This document already has an order." });
+    }
+  }
 
   // Rates from the target printer (falls back to defaults).
   let bw = DEFAULT_BW, color = DEFAULT_COLOR;
@@ -140,6 +150,7 @@ ordersRouter.get("/checkout", async (req, res) => {
       amountPaise: order.costPaise,
       name: "Prinsta",
       description: `Print order ${order.orderCode}`,
+      image: `${publicBaseUrl(req)}/logo.png`,
       verifyPath: `${publicBaseUrl(req)}/api/orders/verify`,
       token: token || "",
     })
