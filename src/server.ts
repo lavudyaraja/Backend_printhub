@@ -17,7 +17,12 @@ import { startCleanup } from "./lib/cleanup";
 
 const app = express();
 app.set("trust proxy", 1); // behind Render/Nginx proxy — needed for rate-limit + secure cookies
-app.use(helmet({ contentSecurityPolicy: false }));
+// This backend serves files (document previews, the checkout logo) that are
+// meant to be embedded by *other* origins — Google/Office document viewers and
+// the Razorpay checkout page. Helmet's default Cross-Origin-Resource-Policy of
+// "same-origin" blocks those cross-origin fetches, leaving previews blank, so we
+// relax it to "cross-origin".
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(
   cors({
     origin: config.corsOrigins.includes("*") ? true : config.corsOrigins,

@@ -104,6 +104,21 @@ async function subsetPdf(buf: Uint8Array, range: string): Promise<Uint8Array | n
   return out.save();
 }
 
+/**
+ * Wrap a raw image (PNG/JPEG) into a single-page PDF sized to the image, so it
+ * can be printed over IPP (which expects application/pdf). Returns null for
+ * formats pdf-lib can't embed (webp/gif/heic) — the caller then serves the
+ * original bytes.
+ */
+async function imageToPdf(buf: Uint8Array, mime: string): Promise<Uint8Array | null> {
+  const pdf = await PDFDocument.create();
+  const isPng = mime.includes("png") || (buf[0] === 0x89 && buf[1] === 0x50);
+  const img = isPng ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
+  const page = pdf.addPage([img.width, img.height]);
+  page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+  return pdf.save();
+}
+
 async function serveFile(req: any, res: any) {
   const doc = await prisma.document.findUnique({
     where: { id: req.params.id },
@@ -124,6 +139,23 @@ async function serveFile(req: any, res: any) {
       if (subset) body = subset;
     } catch (e) {
       console.error("[documents] pdf subset failed, serving full file:", e);
+    }
+  }
+
+  // ?format=pdf → the caller (direct-print) needs a real PDF. Printers speak IPP
+  // with document-format application/pdf, so an image must be wrapped in a PDF
+  // page or the printer rejects the job. PDFs already qualify and pass through.
+  if (req.query.format === "pdf" && doc.fileType === "image") {
+    try {
+      const wrapped = await imageToPdf(body, doc.mimeType || "");
+      if (wrapped) {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="print.pdf"`);
+        res.setHeader("Cache-Control", "public, max-age=600");
+        return res.send(Buffer.from(wrapped));
+      }
+    } catch (e) {
+      console.error("[documents] image→pdf failed, serving original:", e);
     }
   }
 
