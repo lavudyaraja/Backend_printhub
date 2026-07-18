@@ -7,6 +7,7 @@ import { PDFDocument } from "pdf-lib";
 import { prisma } from "../lib/prisma";
 import { config } from "../lib/config";
 import { imageToUrf } from "../lib/urf";
+import { imageToPwgRaster } from "../lib/pwgRaster";
 import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
 
 export const documentsRouter = Router();
@@ -140,6 +141,20 @@ async function serveFile(req: any, res: any) {
       if (subset) body = subset;
     } catch (e) {
       console.error("[documents] pdf subset failed, serving full file:", e);
+    }
+  }
+
+  // ?format=pwg → PWG-Raster, the format IPP Everywhere printers must accept.
+  if (req.query.format === "pwg" && doc.fileType === "image") {
+    try {
+      const pwg = await imageToPwgRaster(Buffer.from(body));
+      res.setHeader("Content-Type", "image/pwg-raster");
+      res.setHeader("Content-Disposition", `inline; filename="print.pwg"`);
+      res.setHeader("Cache-Control", "public, max-age=600");
+      return res.send(pwg);
+    } catch (e) {
+      console.error("[documents] image→pwg failed:", e);
+      return res.status(500).json({ error: "Could not rasterise the image for printing." });
     }
   }
 

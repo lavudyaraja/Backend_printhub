@@ -93,9 +93,30 @@ model User {
   orders        Order[]
   notifications Notification[]
   walletTxns    WalletTransaction[]
+  bankAccount   BankAccount?
 
   @@index([phone])
   @@index([email])
+}
+
+/// Payout destination for a shop owner. One per account. The full account
+/// number is stored so payouts can be made, but API responses only ever expose
+/// the last four digits.
+model BankAccount {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  accountHolder String
+  accountNumber String
+  ifsc          String
+  bankName      String?
+  branch        String?
+  upiId         String?
+  /// Set once the account has been verified (e.g. by a penny drop).
+  verified      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model WalletTransaction {

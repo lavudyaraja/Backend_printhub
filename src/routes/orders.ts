@@ -213,7 +213,7 @@ ordersRouter.post("/:id/simulate-pay", requireAuth, async (req: AuthedRequest, r
 // The app calls this as the user prints: PAID → PRINTING (dialog opened) →
 // COMPLETED (print finished). Only ever moves forward from a paid/printing state.
 ordersRouter.post("/:id/status", requireAuth, async (req: AuthedRequest, res) => {
-  const parsed = z.object({ status: z.enum(["PRINTING", "COMPLETED"]) }).safeParse(req.body);
+  const parsed = z.object({ status: z.enum(["PRINTING", "COMPLETED", "PAID"]) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid status" });
 
   const order = await prisma.order.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
