@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/authGuard";
 import { readSettings, writeSettings, maskSecrets } from "../lib/settings";
+import { pointsToPaise } from "../lib/points";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireRole("ADMIN"));
@@ -25,7 +26,7 @@ adminRouter.get("/metrics", async (_req, res) => {
     totalUsers, newUsersToday,
     revenueAll, revenueMonth, revenueLastMonth,
     pagesAll, printers,
-    walletStats,
+    pointsStats,
   ] = await Promise.all([
     prisma.order.count(),
     prisma.order.count({ where: { status: "COMPLETED" } }),
@@ -41,7 +42,7 @@ adminRouter.get("/metrics", async (_req, res) => {
     prisma.order.aggregate({ _sum: { costPaise: true }, where: { status: "COMPLETED", createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
     prisma.order.aggregate({ _sum: { pagesToPrint: true }, where: { status: "COMPLETED" } }),
     prisma.printer.findMany({ select: { id: true, status: true, paperLevel: true, tonerLevel: true } }),
-    prisma.walletTransaction.aggregate({ _sum: { amountPaise: true }, where: { type: "CREDIT" } }),
+    prisma.pointsTransaction.aggregate({ _sum: { amountPoints: true }, where: { type: "CREDIT" } }),
   ]);
 
   const thisMonthRevenue = revenueMonth._sum.costPaise || 0;
@@ -68,7 +69,8 @@ adminRouter.get("/metrics", async (_req, res) => {
     activePrinters: printers.filter((p) => p.status === "ONLINE").length,
     offlinePrinters: printers.filter((p) => p.status === "OFFLINE").length,
     lowPaperCount: printers.filter((p) => p.paperLevel <= LOW_PAPER).length,
-    walletTopupPaise: walletStats._sum.amountPaise || 0,
+    pointsToppedUp: pointsStats._sum.amountPoints || 0,
+    pointsTopupPaise: pointsToPaise(pointsStats._sum.amountPoints || 0),
   });
 });
 
@@ -191,7 +193,7 @@ adminRouter.get("/users", async (req, res) => {
       skip: parseInt(offset) || 0,
       select: {
         id: true, name: true, phone: true, email: true,
-        role: true, walletBalancePaise: true, createdAt: true,
+        role: true, pointsBalance: true, createdAt: true,
         _count: { select: { orders: true } },
       },
     }),
@@ -201,7 +203,7 @@ adminRouter.get("/users", async (req, res) => {
   res.json({ users, total });
 });
 
-// ── Wallet / transactions ──────────────────────────────────────────────────────
+// ── Points / transactions ──────────────────────────────────────────────────────
 adminRouter.get("/transactions", async (req, res) => {
   const { type, search, limit = "50", offset = "0" } = req.query as Record<string, string>;
 
@@ -215,14 +217,14 @@ adminRouter.get("/transactions", async (req, res) => {
   }
 
   const [txns, total] = await Promise.all([
-    prisma.walletTransaction.findMany({
+    prisma.pointsTransaction.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: Math.min(parseInt(limit) || 50, 200),
       skip: parseInt(offset) || 0,
       include: { user: { select: { name: true, phone: true } } },
     }),
-    prisma.walletTransaction.count({ where }),
+    prisma.pointsTransaction.count({ where }),
   ]);
 
   res.json({ transactions: txns, total });
@@ -232,7 +234,10 @@ adminRouter.get("/transactions", async (req, res) => {
 adminRouter.get("/kiosks", async (_req, res) => {
   const printers = await prisma.printer.findMany({ orderBy: { shopName: "asc" } });
   res.json({
-    kiosks: printers.map((p) => ({
+    // accessPassword is the printer's Wi-Fi Direct join password. Spreading the
+    // whole row put it in this response; it has no use in the console and only
+    // ever belongs in the payload the app gets when a user scans the QR.
+    kiosks: printers.map(({ accessPassword, ...p }) => ({
       ...p,
       needsPaper: p.paperLevel <= LOW_PAPER,
       needsToner: p.tonerLevel <= LOW_PAPER,

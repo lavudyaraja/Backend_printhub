@@ -16,7 +16,13 @@ datasource db {
 
 enum Role {
   STUDENT
+  /// A shop owner who registers and runs their own printers.
+  VENDOR
+  /// Former name for VENDOR. Kept because a Postgres enum value cannot be
+  /// dropped while rows still reference it — scripts/backfill-vendors.ts moves
+  /// those rows to VENDOR, after which this can go.
   OPERATOR
+  /// Platform staff. Sees every vendor.
   ADMIN
 }
 
@@ -57,13 +63,42 @@ enum PrintJobStatus {
   ERROR
 }
 
-enum WalletTxnType {
+/// Points ledger entry type. Renamed from WalletTxnType; `@@map` keeps the
+/// existing database enum so no data migration is required.
+/// What went wrong, as reported by the user. Kept coarse on purpose — a student
+/// standing at a jammed printer should be able to pick in one tap.
+enum ComplaintCategory {
+  PRINTER_NOT_WORKING // machine dead, won't wake, errored mid-job
+  OUT_OF_TONER        // faded, streaked or blank-ish output from a dry cartridge
+  PAPER_JAM
+  OUT_OF_PAPER
+  POOR_PRINT_QUALITY  // smudged, skewed, wrong colours
+  INCOMPLETE_PRINT    // some pages missing / job stopped part-way
+  BLANK_PAGES         // sheets came out empty
+  PAYMENT_OR_POINTS   // charged but nothing printed, points not refunded
+  OTHER
+}
+
+enum ComplaintStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  REJECTED
+  /// Withdrawn by the user (e.g. the printer started working again).
+  CANCELLED
+}
+
+enum PointsTxnType {
   CREDIT // top-up / refund
   DEBIT  // spent on a print order
+
+  @@map("WalletTxnType")
 }
 
 enum PaymentMethod {
-  WALLET
+  /// Paid from the user's Prinsta Points balance. The stored value is still
+  /// "WALLET" so existing rows keep validating.
+  POINTS @map("WALLET")
   UPI
   CREDIT_CARD
   DEBIT_CARD
@@ -83,7 +118,14 @@ model User {
   passwordHash      String?
   rollNumber        String?  @unique
   role              Role     @default(STUDENT)
-  walletBalancePaise Int     @default(0)
+  /// The live balance, in Prinsta Points (1 point = 10 paise — see lib/points.ts).
+  pointsBalance      Int     @default(0)
+  /// Legacy paise balance. Superseded by pointsBalance and no longer written to.
+  /// Kept because deploys use `prisma db push`, which would drop the column (and
+  /// every existing balance with it) if this were renamed rather than added
+  /// alongside. Safe to delete once scripts/backfill-points.ts has been run and
+  /// the new balances verified in production.
+  pointsBalancePaise Int     @default(0) @map("walletBalancePaise")
   emailNotifications Boolean @default(true) // receive order + login emails
   loginAlertSent    Boolean  @default(false) // the "new login" email is sent once, not every sign-in
   createdAt         DateTime @default(now())
@@ -92,8 +134,11 @@ model User {
   documents     Document[]
   orders        Order[]
   notifications Notification[]
-  walletTxns    WalletTransaction[]
+  pointsTxns    PointsTransaction[]
+  complaints    Complaint[]
   bankAccount   BankAccount?
+  /// Set only for vendor-console accounts.
+  vendor        Vendor?
 
   @@index([phone])
   @@index([email])
@@ -119,12 +164,18 @@ model BankAccount {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model WalletTransaction {
+/// The Prinsta Points ledger. Renamed from WalletTransaction; `@@map` keeps
+/// the existing table so no data migration is required.
+model PointsTransaction {
   id           String        @id @default(cuid())
   userId       String
-  type         WalletTxnType
-  amountPaise  Int
-  balancePaise Int
+  type         PointsTxnType
+  /// Points moved by this transaction, and the resulting balance.
+  amountPoints  Int          @default(0)
+  balancePoints Int          @default(0)
+  /// Legacy paise figures — see the note on User.pointsBalancePaise.
+  amountPaise  Int          @default(0)
+  balancePaise Int          @default(0)
   description  String
   orderId      String?
   razorpayId   String?       // Razorpay payment ID
@@ -134,6 +185,7 @@ model WalletTransaction {
 
   @@index([userId])
   @@index([userId, createdAt])
+  @@map("WalletTransaction")
 }
 
 model Notification {
@@ -162,6 +214,10 @@ model Document {
   sizeBytes Int
   pageCount Int      @default(1)
   deleted   Boolean  @default(false)
+  /// Set when the user asks to keep a printed file instead of having it deleted
+  /// straight away — the sweeper leaves the bytes alone until this passes. Null
+  /// means no such request, which is the privacy-preserving default.
+  keepUntil DateTime?
   createdAt DateTime @default(now())
 
   user  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -176,6 +232,12 @@ model Order {
   userId     String
   documentId String      @unique
   printerId  String?
+
+  // Copied from the printer at order time rather than joined through it. A
+  // printer can later be reassigned, sold or deleted; a payout already made has
+  // to keep pointing at whoever actually earned it.
+  vendorId   String?
+  locationId String?
 
   // print configuration
   colorMode      ColorMode @default(BW)
@@ -202,16 +264,66 @@ model Order {
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   document Document  @relation(fields: [documentId], references: [id])
   printer  Printer?  @relation(fields: [printerId], references: [id])
+  vendor   Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
   printJob PrintJob?
+  complaints Complaint[]
 
   @@index([userId])
   @@index([status])
   @@index([createdAt])
+  @@index([vendorId])
+}
+
+/// A shop owner. One Vendor per vendor-console login.
+///
+/// Printers used to record their owner as loose text (ownerName, mobileNumber),
+/// which meant nothing could actually be scoped to an owner — every printer route
+/// had to be ADMIN-only because there was no way to ask "is this yours?".
+model Vendor {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  shopName     String
+  contactName  String?
+  mobileNumber String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locations Location[]
+  printers  Printer[]
+  orders    Order[]
+}
+
+/// A physical place a vendor operates from — one vendor can run several.
+///
+/// This is what makes the same printer model at different branches unambiguous:
+/// each machine is its own Printer row pointing at the Location it stands in, so
+/// a scanned QR resolves to one machine, at one place, owned by one vendor.
+model Location {
+  id        String   @id @default(cuid())
+  vendorId  String
+  name      String   // e.g. "MG Road branch"
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vendor   Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  printers Printer[]
+  orders   Order[]
+
+  @@index([vendorId])
 }
 
 model Printer {
   id             String        @id @default(cuid())
   uniquePrinterId String       @unique // e.g. PRN-AB12CD
+
+  // Ownership. Nullable so `prisma db push` doesn't reject the existing rows,
+  // which predate vendors; scripts/backfill-vendors.ts fills them in and an
+  // admin can reassign anything it couldn't work out.
+  vendorId       String?
+  locationId     String?
 
   // Basic info
   name           String
@@ -253,11 +365,16 @@ model Printer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  vendor    Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  location  Location?  @relation(fields: [locationId], references: [id], onDelete: SetNull)
   orders    Order[]
   printJobs PrintJob[]
+  complaints Complaint[]
 
   @@index([status])
   @@index([shopName])
+  @@index([vendorId])
+  @@index([locationId])
 }
 
 model PrintJob {
@@ -276,6 +393,61 @@ model PrintJob {
   printer Printer @relation(fields: [printerId], references: [id])
 
   @@index([status])
+}
+
+/// A problem report raised by a user from the mobile app — a dead printer, an
+/// empty cartridge, pages that came out blank.
+///
+/// Deliberately separate from SupportTicket: that is a generic contact-us inbox
+/// keyed by a typed-in email, whereas a complaint is always tied to the signed-in
+/// account and usually to the specific order or printer that failed, which is
+/// what makes it actionable (and refundable) without a back-and-forth.
+model Complaint {
+  id         String            @id @default(cuid())
+  /// Human-quotable reference, e.g. CMP-8F3A2K.
+  code       String            @unique
+  userId     String
+  /// The order that went wrong, when the user reported from an order.
+  orderId    String?
+  /// The machine involved. Kept even if the order is missing — a walk-up user
+  /// can report a broken printer without having placed an order at all.
+  printerId  String?
+  category   ComplaintCategory
+  subject    String
+  description String
+  status     ComplaintStatus   @default(OPEN)
+  /// Staff response, shown to the user on the complaint detail screen.
+  resolution String?
+  resolvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order   Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  printer Printer?         @relation(fields: [printerId], references: [id], onDelete: SetNull)
+  photos  ComplaintPhoto[]
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([printerId])
+}
+
+/// Evidence photo attached to a complaint — a shot of the jam, the faded page,
+/// the error on the printer's panel. Stored in Neon alongside the row for the
+/// same reason Document.fileData is: there is no external object storage.
+model ComplaintPhoto {
+  id          String   @id @default(cuid())
+  complaintId String
+  fileName    String
+  mimeType    String
+  data        Bytes
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+
+  @@index([complaintId])
 }
 
 model SupportTicket {

@@ -6,13 +6,16 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
 import { config } from "./lib/config";
+import { PAISE_PER_POINT, TOPUP_BONUS_TIERS } from "./lib/points";
 import { authRouter } from "./routes/auth";
 import { printersRouter } from "./routes/printers";
 import { adminRouter } from "./routes/admin";
 import { documentsRouter } from "./routes/documents";
 import { ordersRouter } from "./routes/orders";
-import { walletRouter } from "./routes/wallet";
+import { pointsRouter } from "./routes/points";
+import { vendorsRouter } from "./routes/vendors";
 import { notificationsRouter } from "./routes/notifications";
+import { complaintsRouter } from "./complaints/router";
 import { startCleanup } from "./lib/cleanup";
 
 const app = express();
@@ -37,8 +40,17 @@ app.use(express.static(path.join(process.cwd(), "public"), { maxAge: "7d" }));
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prinsta-admin-backend" }));
 
 // Public, non-secret settings the clients need to render prices correctly.
+// The points rate and bonus tiers are served rather than hardcoded in the app:
+// if the two ever disagreed, the user would be shown one price and charged
+// another.
 app.get("/api/config", (_req, res) =>
-  res.json({ walletDiscountPercent: config.walletDiscountPercent })
+  res.json({
+    pointsDiscountPercent: config.pointsDiscountPercent,
+    paisePerPoint: PAISE_PER_POINT,
+    topupBonusTiers: TOPUP_BONUS_TIERS,
+    // Old key, kept so already-installed mobile builds keep reading a discount.
+    walletDiscountPercent: config.pointsDiscountPercent,
+  })
 );
 
 // Throttle auth endpoints to stop brute-force abuse.
@@ -52,11 +64,16 @@ const authLimiter = rateLimit({
 
 app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/printers", printersRouter);
+app.use("/api/vendors", vendorsRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/orders", ordersRouter);
-app.use("/api/wallet", walletRouter);
+app.use("/api/points", pointsRouter);
+// Pre-rename path. Installed mobile builds still call /api/wallet, so it stays
+// mounted as an alias until those have aged out.
+app.use("/api/wallet", pointsRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/complaints", complaintsRouter);
 
 startCleanup();
 

@@ -41,9 +41,14 @@ export const config = {
   // Upload limits
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 50 * 1024 * 1024), // 50 MB
 
-  // Paying from the Prinsta wallet is cheaper than paying directly — it saves us
+  // Paying from Prinsta Points is cheaper than paying directly — it saves us
   // the payment-gateway fee, so the saving is passed back to the user.
-  walletDiscountPercent: Math.min(100, Math.max(0, Number(process.env.WALLET_DISCOUNT_PERCENT || 10))),
+  pointsDiscountPercent: Math.min(
+    100,
+    // WALLET_DISCOUNT_PERCENT is the old name — still honoured so an existing
+    // deployment's env doesn't silently fall back to the default on rename.
+    Math.max(0, Number(process.env.POINTS_DISCOUNT_PERCENT || process.env.WALLET_DISCOUNT_PERCENT || 10))
+  ),
 };
 
 /**

@@ -64,8 +64,8 @@ export function verifyWebhookSignature(rawBody: string, signature: string, secre
 
 /**
  * HTML for the hosted checkout page shown inside the app WebView.
- * On success it POSTs to `verifyPath` (with the Bearer token) and then
- * postMessages the result back to React Native.
+ * On success it POSTs to `verifyPath` (identifying itself with the single-use
+ * checkout session id) and then postMessages the result back to React Native.
  */
 export function checkoutPage(opts: {
   razorpayOrderId: string;
@@ -73,7 +73,8 @@ export function checkoutPage(opts: {
   name: string;
   description: string;
   verifyPath: string; // absolute URL to POST the payment result to
-  token: string;
+  /** Single-use session proving which user opened this page. Never a JWT. */
+  sessionId: string;
   image?: string; // logo shown in the Razorpay checkout (replaces the "P" avatar)
   prefillContact?: string;
   prefillEmail?: string;
@@ -87,7 +88,7 @@ export function checkoutPage(opts: {
     description: opts.description,
     image: opts.image || "",
     verifyUrl: opts.verifyPath,
-    token: opts.token,
+    sessionId: opts.sessionId,
     prefillContact: opts.prefillContact || "",
     prefillEmail: opts.prefillEmail || "",
     extra: opts.extra || {},
@@ -120,8 +121,8 @@ export function checkoutPage(opts: {
   function verify(resp){
     fetch(cfg.verifyUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + cfg.token },
-      body: JSON.stringify(Object.assign({}, resp, cfg.extra))
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ sessionId: cfg.sessionId }, resp, cfg.extra))
     })
     .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
     .then(function(res){

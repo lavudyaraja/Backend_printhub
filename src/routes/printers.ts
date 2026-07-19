@@ -3,7 +3,15 @@ import { z } from "zod";
 import QRCode from "qrcode";
 import { nanoid } from "nanoid";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/authGuard";
+import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
+import {
+  isAdminRole,
+  isVendorRole,
+  requireVendorId,
+  ownedPrinterFilter,
+  assertCanManagePrinter,
+  locationBelongsToVendor,
+} from "../lib/vendorScope";
 
 export const printersRouter = Router();
 
@@ -43,13 +51,20 @@ const printerSchema = z.object({
   costPerBWPagePaise: z.number().int().min(0).default(200),
   costPerColorPagePaise: z.number().int().min(0).default(1000),
   status: z.enum(["ONLINE", "OFFLINE", "BUSY", "ERROR", "OUT_OF_PAPER", "LOW_TONER"]).optional(),
+  /** Which of the vendor's branches this machine stands in. */
+  locationId: z.string().optional(),
 });
 
 // ── List printers (auth required) ─────────────────────────────────────────────
-printersRouter.get("/", requireAuth, async (req, res) => {
+// Students see every printer — that's how they find one near them. A vendor sees
+// only their own, so one shop can't read another's estate. An admin sees all.
+printersRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
   const { status, search, limit = "50", offset = "0" } = req.query as Record<string, string>;
+  const scope = isVendorRole(req.user?.role) ? await ownedPrinterFilter(req) : {};
+
   const printers = await prisma.printer.findMany({
     where: {
+      ...scope,
       ...(status ? { status: status as any } : {}),
       ...(search ? {
         OR: [
@@ -70,11 +85,14 @@ printersRouter.get("/", requireAuth, async (req, res) => {
       costPerBWPagePaise: true, costPerColorPagePaise: true,
       supportedPaperSizes: true, paperLevel: true, tonerLevel: true,
       lastSeenAt: true, createdAt: true,
+      vendorId: true, locationId: true,
+      location: { select: { id: true, name: true } },
       _count: { select: { orders: true } },
     },
   });
   const total = await prisma.printer.count({
     where: {
+      ...scope,
       ...(status ? { status: status as any } : {}),
       ...(search ? {
         OR: [
@@ -146,13 +164,31 @@ printersRouter.get("/:id", requireAuth, async (req, res) => {
   res.json({ printer: safe });
 });
 
-// ── Register printer (admin only) ─────────────────────────────────────────────
-printersRouter.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
+// ── Register printer ──────────────────────────────────────────────────────────
+// A vendor registers their own machines; the new printer is attached to them
+// automatically, so nobody can register a printer into someone else's estate.
+// An admin may also register on a vendor's behalf by passing vendorId.
+printersRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
   const parsed = printerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.errors[0]?.message || "Invalid input" });
   }
   const data = parsed.data;
+
+  let vendorId: string | null;
+  if (isAdminRole(req.user?.role)) {
+    vendorId = typeof req.body.vendorId === "string" ? req.body.vendorId : null;
+  } else {
+    vendorId = await requireVendorId(req, res);
+    if (!vendorId) return;
+  }
+
+  // A printer may only be placed in a branch its own vendor runs.
+  if (data.locationId) {
+    if (!vendorId || !(await locationBelongsToVendor(data.locationId, vendorId))) {
+      return res.status(400).json({ error: "That location doesn't belong to this vendor." });
+    }
+  }
 
   const uniquePrinterId = generatePrinterId();
   const { qrData, qrCode } = await generateQR(uniquePrinterId);
@@ -180,6 +216,8 @@ printersRouter.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => 
       costPerBWPagePaise: data.costPerBWPagePaise,
       costPerColorPagePaise: data.costPerColorPagePaise,
       status: data.status || "OFFLINE",
+      vendorId,
+      locationId: data.locationId || null,
       qrData,
       qrCode,
     },
@@ -187,13 +225,26 @@ printersRouter.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => 
   res.status(201).json({ printer });
 });
 
-// ── Update printer (admin only) ───────────────────────────────────────────────
-printersRouter.put("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
+// ── Update printer ────────────────────────────────────────────────────────────
+// Admins may edit any printer; a vendor only their own.
+printersRouter.put("/:id", requireAuth, async (req: AuthedRequest, res) => {
+  if (!(await assertCanManagePrinter(req, res, req.params.id))) return;
+
   const parsed = printerSchema.partial().safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.errors[0]?.message || "Invalid input" });
   }
   const data = parsed.data;
+
+  if (data.locationId) {
+    const current = await prisma.printer.findUnique({
+      where: { id: req.params.id },
+      select: { vendorId: true },
+    });
+    if (!current?.vendorId || !(await locationBelongsToVendor(data.locationId, current.vendorId))) {
+      return res.status(400).json({ error: "That location doesn't belong to this printer's vendor." });
+    }
+  }
 
   try {
     const printer = await prisma.printer.update({
@@ -219,6 +270,7 @@ printersRouter.put("/:id", requireAuth, requireRole("ADMIN"), async (req, res) =
         ...(data.costPerBWPagePaise !== undefined ? { costPerBWPagePaise: data.costPerBWPagePaise } : {}),
         ...(data.costPerColorPagePaise !== undefined ? { costPerColorPagePaise: data.costPerColorPagePaise } : {}),
         ...(data.status !== undefined ? { status: data.status } : {}),
+        ...(data.locationId !== undefined ? { locationId: data.locationId || null } : {}),
       },
     });
     res.json({ printer });
@@ -228,8 +280,10 @@ printersRouter.put("/:id", requireAuth, requireRole("ADMIN"), async (req, res) =
   }
 });
 
-// ── Regenerate QR (admin only) ─────────────────────────────────────────────────
-printersRouter.post("/:id/regenerate-qr", requireAuth, requireRole("ADMIN"), async (req, res) => {
+// ── Regenerate QR ─────────────────────────────────────────────────────────────
+printersRouter.post("/:id/regenerate-qr", requireAuth, async (req: AuthedRequest, res) => {
+  if (!(await assertCanManagePrinter(req, res, req.params.id))) return;
+
   const printer = await prisma.printer.findUnique({ where: { id: req.params.id } });
   if (!printer) return res.status(404).json({ error: "Printer not found" });
 
@@ -241,8 +295,10 @@ printersRouter.post("/:id/regenerate-qr", requireAuth, requireRole("ADMIN"), asy
   res.json({ printer: updated });
 });
 
-// ── Delete printer (admin only) ───────────────────────────────────────────────
-printersRouter.delete("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
+// ── Delete printer ────────────────────────────────────────────────────────────
+printersRouter.delete("/:id", requireAuth, async (req: AuthedRequest, res) => {
+  if (!(await assertCanManagePrinter(req, res, req.params.id))) return;
+
   try {
     await prisma.printer.delete({ where: { id: req.params.id } });
     res.json({ deleted: true });

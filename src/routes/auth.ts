@@ -77,24 +77,60 @@ authRouter.post("/register", async (req, res) => {
   res.json({ token, user: safeUser(user) });
 });
 
-// ── Register admin (email + password; no phone or code required) ───
+// ── Console registration (email + password; no phone or code required) ───
+//
+// Two console roles sign up through here:
+//   "vendor" → VENDOR   — a shop owner. Open self-signup.
+//   "admin"  → ADMIN    — platform staff, sees EVERY vendor's data.
+//
+// "operator" is the old name for the admin console and is still accepted, so a
+// browser running a cached copy of the previous frontend keeps working.
+//
+// The role arrives from the client, so the ADMIN path must be gated or anyone
+// could POST accountType:"admin" and hand themselves the whole platform. The
+// gate is a shared code in OPERATOR_SIGNUP_CODE; when that env var is unset the
+// ADMIN path is closed entirely rather than left open by default.
+const CONSOLE_ROLE = { vendor: "VENDOR", admin: "ADMIN", operator: "ADMIN" } as const;
+
 const adminRegisterSchema = z.object({
   name: z.string().min(2, "Enter your full name"),
   email: z.string().email("Enter a valid email").transform((e) => e.trim().toLowerCase()),
   password,
+  accountType: z.enum(["vendor", "admin", "operator"]).default("vendor"),
+  signupCode: z.string().optional(),
 });
 
 authRouter.post("/register-admin", async (req, res) => {
   const parsed = adminRegisterSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: firstError(parsed.error) });
-  const { name, email, password: pw } = parsed.data;
+  const { name, email, password: pw, accountType, signupCode } = parsed.data;
+
+  if (CONSOLE_ROLE[accountType] === "ADMIN") {
+    const expected = process.env.OPERATOR_SIGNUP_CODE;
+    if (!expected) {
+      return res.status(403).json({ error: "Admin signup is disabled. Contact the platform team." });
+    }
+    if (signupCode !== expected) {
+      return res.status(403).json({ error: "That admin signup code isn't valid." });
+    }
+  }
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return res.status(409).json({ error: "This email is already registered" });
 
   const passwordHash = await bcrypt.hash(pw, 10);
+  const role = CONSOLE_ROLE[accountType];
   const user = await prisma.user.create({
-    data: { name, email, passwordHash, role: "ADMIN" },
+    data: {
+      name,
+      email,
+      passwordHash,
+      role,
+      // A vendor's shop profile is created with the account. Without it the
+      // vendor console can't scope anything — registering a printer, listing
+      // branches and viewing revenue all resolve through the Vendor row.
+      ...(role === "VENDOR" ? { vendor: { create: { shopName: name, contactName: name } } } : {}),
+    },
   });
   const token = signToken({ userId: user.id, role: user.role });
   res.json({ token, user: safeUser(user) });
@@ -145,13 +181,25 @@ authRouter.post("/google", async (req, res) => {
       if (!user.googleId) {
         user = await prisma.user.update({ where: { id: user.id }, data: { googleId } });
       }
-      if (user.role !== "ADMIN" && user.role !== "OPERATOR") {
-        return res.status(403).json({ error: "Access denied. An admin account is required." });
+      // OPERATOR is the pre-rename name for VENDOR; accounts not yet moved by
+      // scripts/backfill-vendors.ts still carry it.
+      if (user.role !== "ADMIN" && user.role !== "VENDOR" && user.role !== "OPERATOR") {
+        return res.status(403).json({ error: "Access denied. A console account is required." });
       }
     } else {
-      // First Google sign-in → create admin account automatically
+      // First Google sign-in → create the account. Same rule as the password
+      // path: a brand-new Google account may only become a VENDOR. Minting an
+      // ADMIN here would let anyone with a Google account take over the
+      // platform, and OAuth gives us no place to check a signup code, so
+      // platform staff are promoted deliberately rather than at first sign-in.
       user = await prisma.user.create({
-        data: { name, email, googleId, role: "ADMIN" },
+        data: {
+          name,
+          email,
+          googleId,
+          role: "VENDOR",
+          vendor: { create: { shopName: name, contactName: name } },
+        },
       });
     }
 
