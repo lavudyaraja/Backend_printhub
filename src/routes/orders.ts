@@ -488,8 +488,9 @@ ordersRouter.post("/:id/status", requireAuth, async (req: AuthedRequest, res) =>
 // that to the registered printer and stamp the order with its printer + vendor,
 // so the order (and any issue raised on it) reaches the right shop.
 ordersRouter.post("/:id/attach-printer", requireAuth, async (req: AuthedRequest, res) => {
+  const uniquePrinterId = typeof req.body?.uniquePrinterId === "string" ? req.body.uniquePrinterId.trim() : "";
   const ssid = typeof req.body?.ssid === "string" ? req.body.ssid.trim() : "";
-  if (!ssid) return res.status(400).json({ error: "Missing printer SSID." });
+  if (!uniquePrinterId && !ssid) return res.status(400).json({ error: "Missing printer id." });
 
   const order = await prisma.order.findFirst({
     where: { id: req.params.id, userId: req.user!.userId },
@@ -500,10 +501,18 @@ ordersRouter.post("/:id/attach-printer", requireAuth, async (req: AuthedRequest,
   // Already linked to a shop — nothing to do.
   if (order.printerId && order.vendorId) return res.json({ ok: true, alreadyLinked: true });
 
-  const printer = await prisma.printer.findFirst({
-    where: { wifiSsid: { equals: ssid, mode: "insensitive" } },
-    select: { id: true, vendorId: true, locationId: true },
-  });
+  // Resolve by the unique printer id first — it identifies the exact machine, so
+  // identical printers at different shops can't be confused. The SSID is only a
+  // last-resort fallback for a legacy QR that carried no id.
+  const printer = uniquePrinterId
+    ? await prisma.printer.findUnique({
+        where: { uniquePrinterId: uniquePrinterId.toUpperCase() },
+        select: { id: true, vendorId: true, locationId: true },
+      })
+    : await prisma.printer.findFirst({
+        where: { wifiSsid: { equals: ssid, mode: "insensitive" } },
+        select: { id: true, vendorId: true, locationId: true },
+      });
   if (!printer) return res.json({ ok: false, reason: "NO_MATCH" });
 
   await prisma.order.update({

@@ -47,18 +47,16 @@ interface QrSource {
  * half-registered machine still gets a scannable code rather than none.
  */
 async function generateQR(src: QrSource): Promise<{ qrData: string; qrCode: string }> {
-  let qrData: string;
-  if (src.wifiSsid) {
-    const ssid = escapeWifiValue(src.wifiSsid);
-    qrData = src.accessPassword
-      ? `WIFI:T:WPA;S:${ssid};P:${escapeWifiValue(src.accessPassword)};;`
-      : `WIFI:T:nopass;S:${ssid};;`;
-  } else {
-    // No network details (only possible on legacy rows regenerated in bulk). A
-    // domain-free identity string — never a URL, so it can't point at anything
-    // undeployed — kept only so such a printer still gets *some* scannable code.
-    qrData = `PRINSTA:PRINTER:${src.uniquePrinterId}`;
-  }
+  // A JSON payload carrying BOTH the unique printer id and the Wi-Fi Direct
+  // credentials. The id is what links an order to the exact machine — identical
+  // printers at different shops share the same SSID, so the SSID alone can't tell
+  // them apart. The app parses this JSON (see printerQr.ts): it joins the network
+  // with ssid/password and attaches the order with the id.
+  const payload: Record<string, string> = { id: src.uniquePrinterId };
+  if (src.wifiSsid) payload.ssid = src.wifiSsid;
+  if (src.accessPassword) payload.password = src.accessPassword;
+  const qrData = JSON.stringify(payload);
+
   const qrCode = await QRCode.toDataURL(qrData, {
     width: 300,
     margin: 2,
