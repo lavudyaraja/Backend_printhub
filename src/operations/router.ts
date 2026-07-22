@@ -272,6 +272,7 @@ operationsRouter.patch("/verifications/shop/:id", async (req: AuthedRequest, res
         body: approve
           ? "Your shop has been verified. You're all set to take orders and receive payouts."
           : `Your KYC was not approved${parsed.data.note ? `: ${parsed.data.note}` : "."} Please review your details and resubmit.`,
+        link: "/vendor/kyc",
       },
     })
     .catch(() => {});

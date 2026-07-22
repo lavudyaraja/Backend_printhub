@@ -8,6 +8,7 @@
 // only (count 0–127 → pixel repeated count+1 times), which is always valid and
 // compresses the large white margins well.
 import Jimp from "jimp";
+import { pdfToImages } from "./pdfRender";
 
 const DPI = 300;
 const PAGE_W = 2480; // A4 @ 300dpi
@@ -22,7 +23,37 @@ function writeString(buf: Buffer, offset: number, value: string, length: number)
   buf.write(value.slice(0, length - 1), offset, "ascii");
 }
 
-function buildPageHeader(): Buffer {
+/** Fit a source image onto a white A4 canvas, centered — the shape the printer wants. */
+function fitOntoA4(img: Jimp): Jimp {
+  const canvas = new Jimp(PAGE_W, PAGE_H, 0xffffffff);
+  img.scaleToFit(PAGE_W, PAGE_H);
+  canvas.composite(img, Math.floor((PAGE_W - img.bitmap.width) / 2), Math.floor((PAGE_H - img.bitmap.height) / 2));
+  return canvas;
+}
+
+/** Encode one already-A4-sized canvas as a PWG page (header + raster rows). */
+function encodePwgPage(canvas: Jimp, totalPages: number): Buffer {
+  canvas.grayscale();
+  const px = canvas.bitmap.data; // RGBA
+  const chunks: Buffer[] = [buildPageHeader(totalPages)];
+  const rowStride = PAGE_W * 4;
+  for (let y = 0; y < PAGE_H; y++) {
+    const base = y * rowStride;
+    const out: number[] = [0]; // line-repeat = 0 → this line appears once
+    let x = 0;
+    while (x < PAGE_W) {
+      const gray = px[base + x * 4]; // grayscale() makes R=G=B
+      let run = 1;
+      while (x + run < PAGE_W && run < 128 && px[base + (x + run) * 4] === gray) run++;
+      out.push(run - 1, gray);
+      x += run;
+    }
+    chunks.push(Buffer.from(out));
+  }
+  return Buffer.concat(chunks);
+}
+
+function buildPageHeader(totalPages = 1): Buffer {
   const h = Buffer.alloc(1796);
   writeString(h, 0, "PwgRaster", 64);
   writeString(h, 64, "", 64);            // MediaColor
@@ -51,7 +82,7 @@ function buildPageHeader(): Buffer {
   h.writeUInt32BE(0, 396);               // ColorOrder: chunky
   h.writeUInt32BE(COLORSPACE_SGRAY, 400);
   h.writeUInt32BE(1, 420);               // NumColors
-  h.writeUInt32BE(1, 452);               // TotalPageCount
+  h.writeUInt32BE(totalPages, 452);      // TotalPageCount
   h.writeInt32BE(1, 456);                // CrossFeedTransform
   h.writeInt32BE(1, 460);                // FeedTransform
   h.writeUInt32BE(0, 464);               // ImageBoxLeft
@@ -67,31 +98,17 @@ function buildPageHeader(): Buffer {
   return h;
 }
 
+/** One image → single-page PWG-Raster. */
 export async function imageToPwgRaster(buf: Buffer): Promise<Buffer> {
-  const img = await Jimp.read(buf);
-  // White A4 canvas, image fitted inside it and centred, then flattened to gray.
-  const canvas = new Jimp(PAGE_W, PAGE_H, 0xffffffff);
-  img.scaleToFit(PAGE_W, PAGE_H);
-  canvas.composite(img, Math.floor((PAGE_W - img.bitmap.width) / 2), Math.floor((PAGE_H - img.bitmap.height) / 2));
-  canvas.grayscale();
-  const px = canvas.bitmap.data; // RGBA
+  const canvas = fitOntoA4(await Jimp.read(buf));
+  return Buffer.concat([Buffer.from("RaS2", "ascii"), encodePwgPage(canvas, 1)]);
+}
 
-  const chunks: Buffer[] = [Buffer.from("RaS2", "ascii"), buildPageHeader()];
-
-  const rowStride = PAGE_W * 4;
-  for (let y = 0; y < PAGE_H; y++) {
-    const base = y * rowStride;
-    const out: number[] = [0]; // line-repeat = 0 → this line appears once
-    let x = 0;
-    while (x < PAGE_W) {
-      const gray = px[base + x * 4]; // grayscale() makes R=G=B
-      let run = 1;
-      while (x + run < PAGE_W && run < 128 && px[base + (x + run) * 4] === gray) run++;
-      out.push(run - 1, gray);
-      x += run;
-    }
-    chunks.push(Buffer.from(out));
-  }
-
+/** A PDF → multi-page PWG-Raster, one raster page per PDF page. */
+export async function pdfToPwgRaster(pdf: Buffer): Promise<Buffer> {
+  const images = await pdfToImages(pdf);
+  if (images.length === 0) throw new Error("PDF produced no pages to rasterise.");
+  const chunks: Buffer[] = [Buffer.from("RaS2", "ascii")];
+  for (const img of images) chunks.push(encodePwgPage(fitOntoA4(img), images.length));
   return Buffer.concat(chunks);
 }

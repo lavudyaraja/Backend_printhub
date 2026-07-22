@@ -6,8 +6,8 @@ import multer from "multer";
 import { PDFDocument } from "pdf-lib";
 import { prisma } from "../lib/prisma";
 import { config } from "../lib/config";
-import { imageToUrf } from "../lib/urf";
-import { imageToPwgRaster } from "../lib/pwgRaster";
+import { imageToUrf, pdfToUrf } from "../lib/urf";
+import { imageToPwgRaster, pdfToPwgRaster } from "../lib/pwgRaster";
 import { requireAuth, type AuthedRequest } from "../middleware/authGuard";
 import { verifyToken } from "../lib/auth";
 import { signFileToken, verifyFileToken } from "../lib/fileToken";
@@ -293,32 +293,40 @@ async function serveFile(req: any, res: any) {
     }
   }
 
-  // ?format=pwg → PWG-Raster, the format IPP Everywhere printers must accept.
-  if (req.query.format === "pwg" && doc.fileType === "image") {
+  // ?format=pwg → PWG-Raster, the format IPP Everywhere / Mopria printers must
+  // accept. Images rasterise directly; PDFs are rendered page-by-page first, so
+  // a cheap laser with no PDF interpreter (Pantum et al.) can still print them.
+  if (req.query.format === "pwg" && (doc.fileType === "image" || doc.fileType === "pdf")) {
     try {
-      const pwg = await imageToPwgRaster(Buffer.from(body));
+      const pwg =
+        doc.fileType === "pdf"
+          ? await pdfToPwgRaster(Buffer.from(body))
+          : await imageToPwgRaster(Buffer.from(body));
       res.setHeader("Content-Type", "image/pwg-raster");
       res.setHeader("Content-Disposition", `inline; filename="print.pwg"`);
       res.setHeader("Cache-Control", "private, no-store");
       return res.send(pwg);
     } catch (e) {
-      console.error("[documents] image→pwg failed:", e);
-      return res.status(500).json({ error: "Could not rasterise the image for printing." });
+      console.error("[documents] →pwg failed:", e);
+      return res.status(500).json({ error: "Could not rasterise the document for printing." });
     }
   }
 
-  // ?format=urf → the app wants Apple Raster so it can print the image directly
-  // over IPP (no OS dialog). Only images can be rasterised this way.
-  if (req.query.format === "urf" && doc.fileType === "image") {
+  // ?format=urf → Apple Raster, so the app can print directly over IPP (no OS
+  // dialog). Same two sources as PWG.
+  if (req.query.format === "urf" && (doc.fileType === "image" || doc.fileType === "pdf")) {
     try {
-      const urf = await imageToUrf(Buffer.from(body));
+      const urf =
+        doc.fileType === "pdf"
+          ? await pdfToUrf(Buffer.from(body))
+          : await imageToUrf(Buffer.from(body));
       res.setHeader("Content-Type", "image/urf");
       res.setHeader("Content-Disposition", `inline; filename="print.urf"`);
       res.setHeader("Cache-Control", "private, no-store");
       return res.send(urf);
     } catch (e) {
-      console.error("[documents] image→urf failed:", e);
-      return res.status(500).json({ error: "Could not rasterise the image for printing." });
+      console.error("[documents] →urf failed:", e);
+      return res.status(500).json({ error: "Could not rasterise the document for printing." });
     }
   }
 

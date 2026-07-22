@@ -8,25 +8,25 @@
 // runs; we only emit repeat-runs (count 0–127 → pixel repeated count+1 times),
 // which is always valid and compresses the large white margins well.
 import Jimp from "jimp";
+import { pdfToImages } from "./pdfRender";
 
 const DPI = 300;
 const PAGE_W = 2480; // A4 width  @ 300 dpi
 const PAGE_H = 3508; // A4 height @ 300 dpi
 
-export async function imageToUrf(buf: Buffer): Promise<Buffer> {
-  const img = await Jimp.read(buf);
-  // White A4 canvas; fit the image inside it (contain), centered.
+function fileHeader(pageCount: number): Buffer {
+  const h = Buffer.alloc(12);
+  h.write("UNIRAST\0", 0, "binary");
+  h.writeUInt32BE(pageCount, 8);
+  return h;
+}
+
+/** Encode one image as a URF page (32-byte header + PackBits rows). */
+function encodeUrfPage(img: Jimp): Buffer {
   const canvas = new Jimp(PAGE_W, PAGE_H, 0xffffffff);
   img.scaleToFit(PAGE_W, PAGE_H);
   canvas.composite(img, Math.floor((PAGE_W - img.bitmap.width) / 2), Math.floor((PAGE_H - img.bitmap.height) / 2));
   const px = canvas.bitmap.data; // RGBA
-
-  const chunks: Buffer[] = [];
-
-  const fileHeader = Buffer.alloc(12);
-  fileHeader.write("UNIRAST\0", 0, "binary");
-  fileHeader.writeUInt32BE(1, 8); // page count
-  chunks.push(fileHeader);
 
   const pageHeader = Buffer.alloc(32);
   pageHeader.writeUInt8(24, 0); // bits per pixel (RGB)
@@ -36,8 +36,8 @@ export async function imageToUrf(buf: Buffer): Promise<Buffer> {
   pageHeader.writeUInt32BE(PAGE_W, 12);
   pageHeader.writeUInt32BE(PAGE_H, 16);
   pageHeader.writeUInt32BE(DPI, 20);
-  chunks.push(pageHeader);
 
+  const chunks: Buffer[] = [pageHeader];
   const rowStride = PAGE_W * 4;
   for (let y = 0; y < PAGE_H; y++) {
     const base = y * rowStride;
@@ -57,6 +57,19 @@ export async function imageToUrf(buf: Buffer): Promise<Buffer> {
     }
     chunks.push(Buffer.from(out));
   }
+  return Buffer.concat(chunks);
+}
 
+/** One image → single-page URF. */
+export async function imageToUrf(buf: Buffer): Promise<Buffer> {
+  return Buffer.concat([fileHeader(1), encodeUrfPage(await Jimp.read(buf))]);
+}
+
+/** A PDF → multi-page URF, one raster page per PDF page. */
+export async function pdfToUrf(pdf: Buffer): Promise<Buffer> {
+  const images = await pdfToImages(pdf);
+  if (images.length === 0) throw new Error("PDF produced no pages to rasterise.");
+  const chunks: Buffer[] = [fileHeader(images.length)];
+  for (const img of images) chunks.push(encodeUrfPage(img));
   return Buffer.concat(chunks);
 }

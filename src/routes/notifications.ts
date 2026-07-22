@@ -10,7 +10,7 @@ notificationsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
     where: { userId: req.user!.userId },
     orderBy: { createdAt: "desc" },
     take: 50,
-    select: { id: true, title: true, body: true, read: true, orderId: true, createdAt: true },
+    select: { id: true, title: true, body: true, read: true, orderId: true, link: true, createdAt: true },
   });
   res.json({ notifications });
 });

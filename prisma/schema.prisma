@@ -342,6 +342,10 @@ model Notification {
   body      String
   read      Boolean  @default(false)
   orderId   String?
+  /// Where tapping this notification should take the recipient — a console path
+  /// (e.g. "/vendor/issues") for shop alerts. Null means it's informational and
+  /// isn't linked anywhere.
+  link      String?
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

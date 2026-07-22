@@ -107,6 +107,7 @@ async function notifyComplaintVendor(
         ? `${code} — ${subject}. The customer is asking for a refund. Review it and forward to the platform to decide.`
         : `${code} — ${subject}. Open your console to see the details.`,
       orderId,
+      link: "/vendor/issues",
     },
   });
 }
@@ -396,6 +397,7 @@ export async function refundComplaint(
             title: "Refund issued by the platform",
             body: `${complaint.code}${complaint.order?.orderCode ? ` (order ${complaint.order.orderCode})` : ""} was refunded to the customer.`,
             orderId: complaint.orderId,
+            link: "/vendor/issues",
           },
         })
         .catch(() => {});
