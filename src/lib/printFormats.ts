@@ -164,8 +164,19 @@ async function toJpeg(input: FormatInput): Promise<Buffer> {
   }
   if (input.fileType === "pdf") {
     const images = await pdfToImages(input.body);
-    if (images.length !== 1) throw new Error("JPEG only supports single-page documents.");
-    return images[0].quality(90).getBufferAsync(Jimp.MIME_JPEG);
+    if (images.length === 0) throw new Error("PDF produced no pages to render as JPEG.");
+    if (images.length === 1) {
+      return images[0].quality(90).getBufferAsync(Jimp.MIME_JPEG);
+    }
+    // Composite multi-page PDF pages vertically into a single image so any JPEG-capable printer can print it.
+    const pageW = images[0].bitmap.width;
+    const pageH = images[0].bitmap.height;
+    const totalH = pageH * images.length;
+    const canvas = new Jimp(pageW, totalH, 0xffffffff);
+    for (let i = 0; i < images.length; i++) {
+      canvas.composite(images[i], 0, i * pageH);
+    }
+    return canvas.quality(90).getBufferAsync(Jimp.MIME_JPEG);
   }
   throw new Error(`Cannot render a "${input.fileType}" document as JPEG.`);
 }
