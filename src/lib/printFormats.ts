@@ -28,6 +28,12 @@ export interface FormatInput {
   /** "pdf" | "image" | "docx" | "pptx" | "other" — from the upload's detectType. */
   fileType: string;
   mimeType: string;
+  /**
+   * Target resolution for raster formats (PWG/URF), read off the printer by the
+   * app. Matching the printer's own resolution is what stops it accepting a job
+   * and then aborting it. Ignored by non-raster formats.
+   */
+  dpi?: number;
 }
 
 export interface PrintFormatSpec {
@@ -203,13 +209,13 @@ export const PRINT_FORMATS: Record<PrintFormatKey, PrintFormatSpec> = {
     key: "pwg",
     mime: "image/pwg-raster",
     ext: "pwg",
-    produce: (i) => (i.fileType === "pdf" ? pdfToPwgRaster(i.body) : imageToPwgRaster(i.body)),
+    produce: (i) => (i.fileType === "pdf" ? pdfToPwgRaster(i.body, i.dpi) : imageToPwgRaster(i.body, i.dpi)),
   },
   urf: {
     key: "urf",
     mime: "image/urf",
     ext: "urf",
-    produce: (i) => (i.fileType === "pdf" ? pdfToUrf(i.body) : imageToUrf(i.body)),
+    produce: (i) => (i.fileType === "pdf" ? pdfToUrf(i.body, i.dpi) : imageToUrf(i.body, i.dpi)),
   },
   pdf: { key: "pdf", mime: "application/pdf", ext: "pdf", produce: toPdf },
   jpeg: { key: "jpeg", mime: "image/jpeg", ext: "jpg", produce: toJpeg },

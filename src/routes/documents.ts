@@ -289,10 +289,12 @@ async function serveFile(req: any, res: any) {
   const fmt = printFormat(req.query.format);
   if (fmt) {
     try {
+      const dpi = typeof req.query.dpi === "string" ? parseInt(req.query.dpi, 10) : undefined;
       const out = await fmt.produce({
         body: Buffer.from(body),
         fileType: doc.fileType,
         mimeType: doc.mimeType || "",
+        dpi: Number.isFinite(dpi) ? dpi : undefined,
       });
       res.setHeader("Content-Type", fmt.mime);
       res.setHeader("Content-Disposition", `inline; filename="print.${fmt.ext}"`);
